@@ -1,0 +1,2 @@
+ALTER TABLE project_invitations
+    ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE;

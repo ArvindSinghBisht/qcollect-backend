@@ -1,0 +1,2 @@
+ALTER TABLE forms
+ALTER COLUMN survey_json TYPE TEXT;

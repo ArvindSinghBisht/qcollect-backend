@@ -1,0 +1,39 @@
+package com.example.qcollect.form.entity;
+
+import com.example.qcollect.common.entity.BaseEntity;
+import com.example.qcollect.submission.entity.SubmissionAnswer;
+import jakarta.persistence.*;
+import lombok.*;
+
+import java.util.ArrayList;
+import java.util.List;
+
+@Entity
+@Table(name = "form_fields")
+@Getter
+@Setter
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class FormField extends BaseEntity {
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "form_id", nullable = false)
+    private Form form;
+
+    @Column(nullable = false)
+    private String label;
+
+    @Column(nullable = false)
+    private String type;
+
+    @Column(name = "required")
+    private Boolean required;
+
+    @Column(name = "field_order")
+    private Integer fieldOrder;
+
+    @OneToMany(mappedBy = "field")
+    @Builder.Default
+    private List<SubmissionAnswer> answers = new ArrayList<>();
+}

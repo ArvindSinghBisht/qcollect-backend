@@ -1,0 +1,34 @@
+QCollect backend build fix notes
+
+Fixed files:
+1. src/main/java/com/example/qcollect/submission/entity/Submission.java
+   - Added @Builder.Default on answers list so Lombok builder preserves default initialization.
+
+2. src/main/java/com/example/qcollect/auth/security/JwtService.java
+   - Updated JWT builder/parser calls to the current JJWT 0.12.x style.
+   - Kept same claims: userId, tenantId and email subject.
+
+3. src/main/java/com/example/qcollect/config/ApplicationConfig.java
+   - Updated DaoAuthenticationProvider initialization for current Spring Security.
+   - Kept same CustomUserDetailsService and BCryptPasswordEncoder logic.
+
+4. src/main/java/com/example/qcollect/formfield/dto/CreateFormFieldRequest.java
+   - Added defaultValue and validationJson properties.
+   - Added getFieldOrder() mapping to existing displayOrder to preserve request functionality.
+
+5. src/main/java/com/example/qcollect/formfield/dto/UpdateFormFieldRequest.java
+   - Added defaultValue and validationJson properties.
+   - Added getFieldOrder() mapping to existing displayOrder to preserve request functionality.
+
+6. src/main/java/com/example/qcollect/formfield/service/FormFieldServiceImpl.java
+   - Converted incoming String fieldType to FieldType enum using FieldType.valueOf(...).
+   - Kept the API request fieldType as String so existing frontend/API payloads still work.
+
+I could not run Maven in the sandbox because Maven is not installed and the wrapper could not download Maven without internet access. The code changes directly address the errors you listed.
+
+V31 BACKEND FIX
+- Replaced the incorrect duplicate CREATE TABLE migration with a safe schema-alignment migration.
+- Fixes Hibernate error: missing column [comment] in table [submission_answer_reviews].
+- Preserves existing review text by renaming/copying the old remarks column.
+- Backfills reviewed_at before enforcing the entity's NOT NULL contract.
+- Removed stale target output from the delivery; run a clean build so V31 is copied to target/classes.

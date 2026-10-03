@@ -1,0 +1,1048 @@
+--- a/src/main/java/com/example/qcollect/auth/dto/LoginResponse.java
++++ b/src/main/java/com/example/qcollect/auth/dto/LoginResponse.java
+@@ -1,9 +1,11 @@
+ package com.example.qcollect.auth.dto;
+ 
++import com.example.qcollect.project.dto.ProjectMembershipResponse;
++import lombok.Builder;
++import lombok.Getter;
++import lombok.Setter;
+ 
+-
+-import lombok.*;
+-
++import java.util.List;
+ import java.util.UUID;
+ 
+ @Builder
+@@ -27,4 +29,5 @@
+ 
+     private String email;
+ 
+-}
+\ No newline at end of file
++    private List<ProjectMembershipResponse> projects;
++}
+
+--- a/src/main/java/com/example/qcollect/auth/service/AuthServiceImpl.java
++++ b/src/main/java/com/example/qcollect/auth/service/AuthServiceImpl.java
+@@ -5,6 +5,8 @@
+ import com.example.qcollect.auth.dto.RegisterRequest;
+ import com.example.qcollect.auth.security.JwtService;
+ import com.example.qcollect.common.exception.BadRequestException;
++import com.example.qcollect.project.dto.ProjectMembershipResponse;
++import com.example.qcollect.project.repository.ProjectUserRepository;
+ import com.example.qcollect.role.entity.Role;
+ import com.example.qcollect.role.repository.RoleRepository;
+ import com.example.qcollect.user.entity.User;
+@@ -14,9 +16,13 @@
+ import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+ import org.springframework.security.crypto.password.PasswordEncoder;
+ import org.springframework.stereotype.Service;
++import org.springframework.transaction.annotation.Transactional;
++
++import java.util.List;
+ 
+ @Service
+ @RequiredArgsConstructor
++@Transactional
+ public class AuthServiceImpl implements AuthService {
+ 
+     private final UserRepository userRepository;
+@@ -29,6 +35,8 @@
+ 
+     private final JwtService jwtService;
+ 
++    private final ProjectUserRepository projectUserRepository;
++
+     @Override
+     public void register(RegisterRequest request) {
+ 
+@@ -49,27 +57,19 @@
+         User user = new User();
+ 
+         user.setTenantId(null);
+-
+         user.setSystemRole(superAdminRole);
+-
+         user.setFirstName(request.getFirstName());
+-
+         user.setLastName(request.getLastName());
+-
+         user.setEmail(request.getEmail());
+-
+         user.setPhone(request.getPhone());
+-
+-        user.setPassword(
+-                passwordEncoder.encode(request.getPassword())
+-        );
+-
++        user.setPassword(passwordEncoder.encode(request.getPassword()));
+         user.setActive(true);
+ 
+         userRepository.save(user);
+     }
+ 
+     @Override
++    @Transactional(readOnly = true)
+     public LoginResponse login(LoginRequest request) {
+ 
+         authenticationManager.authenticate(
+@@ -89,25 +89,26 @@
+ 
+         String token = jwtService.generateToken(user);
+ 
+-        return LoginResponse.builder()
++        List<ProjectMembershipResponse> projects = projectUserRepository
++                .findActiveMembershipsByUserId(user.getId())
++                .stream()
++                .map(membership -> ProjectMembershipResponse.builder()
++                        .projectId(membership.getProjectId())
++                        .projectName(membership.getProjectName())
++                        .role(membership.getRoleName())
++                        .build())
++                .toList();
+ 
++        return LoginResponse.builder()
+                 .accessToken(token)
+-
+                 .tokenType("Bearer")
+-
+                 .userId(user.getId())
+-
+                 .tenantId(user.getTenantId())
+-
+-                .systemRole(
+-                        user.getSystemRole().getName())
+-
++                .systemRole(user.getSystemRole().getName())
+                 .firstName(user.getFirstName())
+-
+                 .lastName(user.getLastName())
+-
+                 .email(user.getEmail())
+-
++                .projects(projects)
+                 .build();
+     }
+-}
+\ No newline at end of file
++}
+
+--- a/src/main/java/com/example/qcollect/common/context/ProjectContext.java
++++ b/src/main/java/com/example/qcollect/common/context/ProjectContext.java
+@@ -0,0 +1,23 @@
++package com.example.qcollect.common.context;
++
++import java.util.UUID;
++
++public final class ProjectContext {
++
++    private static final ThreadLocal<UUID> CURRENT_PROJECT = new ThreadLocal<>();
++
++    private ProjectContext() {
++    }
++
++    public static void setProjectId(UUID projectId) {
++        CURRENT_PROJECT.set(projectId);
++    }
++
++    public static UUID getProjectId() {
++        return CURRENT_PROJECT.get();
++    }
++
++    public static void clear() {
++        CURRENT_PROJECT.remove();
++    }
++}
+
+--- a/src/main/java/com/example/qcollect/common/context/ProjectContextFilter.java
++++ b/src/main/java/com/example/qcollect/common/context/ProjectContextFilter.java
+@@ -0,0 +1,49 @@
++package com.example.qcollect.common.context;
++
++import jakarta.servlet.FilterChain;
++import jakarta.servlet.ServletException;
++import jakarta.servlet.http.HttpServletRequest;
++import jakarta.servlet.http.HttpServletResponse;
++import org.springframework.core.Ordered;
++import org.springframework.core.annotation.Order;
++import org.springframework.stereotype.Component;
++import org.springframework.util.StringUtils;
++import org.springframework.web.filter.OncePerRequestFilter;
++
++import java.io.IOException;
++import java.util.UUID;
++
++@Component
++@Order(Ordered.HIGHEST_PRECEDENCE + 10)
++public class ProjectContextFilter extends OncePerRequestFilter {
++
++    public static final String PROJECT_HEADER = "X-Project-Id";
++
++    @Override
++    protected void doFilterInternal(
++            HttpServletRequest request,
++            HttpServletResponse response,
++            FilterChain filterChain
++    ) throws ServletException, IOException {
++
++        try {
++            String projectIdHeader = request.getHeader(PROJECT_HEADER);
++
++            if (StringUtils.hasText(projectIdHeader)) {
++                try {
++                    ProjectContext.setProjectId(UUID.fromString(projectIdHeader));
++                } catch (IllegalArgumentException ex) {
++                    response.sendError(
++                            HttpServletResponse.SC_BAD_REQUEST,
++                            "Invalid X-Project-Id header."
++                    );
++                    return;
++                }
++            }
++
++            filterChain.doFilter(request, response);
++        } finally {
++            ProjectContext.clear();
++        }
++    }
++}
+
+--- a/src/main/java/com/example/qcollect/config/SecurityConfig.java
++++ b/src/main/java/com/example/qcollect/config/SecurityConfig.java
+@@ -71,7 +71,7 @@
+                 "https://surprising-insight-production-2c9d.up.railway.app"
+         ));
+         configuration.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+-        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With"));
++        configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "Origin", "X-Requested-With", "X-Project-Id"));
+         configuration.setExposedHeaders(List.of("Authorization"));
+         configuration.setAllowCredentials(true);
+ 
+
+--- a/src/main/java/com/example/qcollect/project/controller/ProjectController.java
++++ b/src/main/java/com/example/qcollect/project/controller/ProjectController.java
+@@ -2,18 +2,30 @@
+ 
+ import com.example.qcollect.auth.security.CustomUserDetails;
+ import com.example.qcollect.common.dto.ApiResponse;
+-import com.example.qcollect.project.dto.*;
++import com.example.qcollect.project.dto.AddProjectMemberRequest;
++import com.example.qcollect.project.dto.CreateAccessorRequest;
++import com.example.qcollect.project.dto.CreateProjectAdminRequest;
++import com.example.qcollect.project.dto.CreateProjectRequest;
++import com.example.qcollect.project.dto.CreateQualityCheckerRequest;
++import com.example.qcollect.project.dto.MyProjectResponse;
++import com.example.qcollect.project.dto.ProjectMemberResponse;
++import com.example.qcollect.project.dto.ProjectResponse;
+ import com.example.qcollect.project.service.ProjectService;
+ import jakarta.validation.Valid;
+ import lombok.RequiredArgsConstructor;
+ import org.springframework.http.ResponseEntity;
+-import org.springframework.security.core.Authentication;
+ import org.springframework.security.core.annotation.AuthenticationPrincipal;
+-import org.springframework.web.bind.annotation.*;
++import org.springframework.web.bind.annotation.DeleteMapping;
++import org.springframework.web.bind.annotation.GetMapping;
++import org.springframework.web.bind.annotation.PathVariable;
++import org.springframework.web.bind.annotation.PostMapping;
++import org.springframework.web.bind.annotation.RequestBody;
++import org.springframework.web.bind.annotation.RequestMapping;
++import org.springframework.web.bind.annotation.RestController;
+ 
+ import java.util.List;
+ import java.util.UUID;
+-import com.example.qcollect.auth.security.CustomUserDetails;
++
+ @RestController
+ @RequestMapping("/projects")
+ @RequiredArgsConstructor
+@@ -24,29 +36,26 @@
+     @PostMapping
+     public ApiResponse<ProjectResponse> createProject(
+             @Valid @RequestBody CreateProjectRequest request,
+-            @AuthenticationPrincipal CustomUserDetails user) {
+-
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         return ApiResponse.<ProjectResponse>builder()
+                 .success(true)
+                 .message("Project created successfully.")
+-                .data(projectService.createProject(
+-                        request,
+-                        user.getUserId()))
++                .data(projectService.createProject(request, user.getUserId()))
+                 .build();
+     }
++
+     @PostMapping("/{projectId}/admins")
+     public ApiResponse<?> createProjectAdmin(
+             @PathVariable UUID projectId,
+             @Valid @RequestBody CreateProjectAdminRequest request,
+-            Authentication authentication) {
+-
+-        CustomUserDetails userDetails =
+-                (CustomUserDetails) authentication.getPrincipal();
+-
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         projectService.createProjectAdmin(
+                 projectId,
+                 request,
+-                userDetails.getUserId());
++                user.getUserId()
++        );
+ 
+         return ApiResponse.builder()
+                 .success(true)
+@@ -58,17 +67,13 @@
+     public ApiResponse<?> createAccessor(
+             @PathVariable UUID projectId,
+             @Valid @RequestBody CreateAccessorRequest request,
+-            Authentication authentication) {
+-
+-        CustomUserDetails user =
+-                (CustomUserDetails) authentication.getPrincipal();
+-
+-        UUID loggedInUserId = user.getUserId();
+-
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         projectService.createAccessor(
+                 projectId,
+                 request,
+-                loggedInUserId);
++                user.getUserId()
++        );
+ 
+         return ApiResponse.builder()
+                 .success(true)
+@@ -80,17 +85,13 @@
+     public ApiResponse<?> createQualityChecker(
+             @PathVariable UUID projectId,
+             @Valid @RequestBody CreateQualityCheckerRequest request,
+-            Authentication authentication) {
+-
+-        CustomUserDetails user =
+-                (CustomUserDetails) authentication.getPrincipal();
+-
+-        UUID loggedInUserId = user.getUserId();
+-
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         projectService.createQualityChecker(
+                 projectId,
+                 request,
+-                loggedInUserId);
++                user.getUserId()
++        );
+ 
+         return ApiResponse.builder()
+                 .success(true)
+@@ -101,32 +102,46 @@
+     @PostMapping("/{projectId}/members")
+     public ApiResponse<ProjectMemberResponse> addMember(
+             @PathVariable UUID projectId,
+-            @Valid @RequestBody AddProjectMemberRequest request) {
+-
++            @Valid @RequestBody AddProjectMemberRequest request,
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         return ApiResponse.<ProjectMemberResponse>builder()
+                 .success(true)
+                 .message("Member added successfully.")
+-                .data(projectService.addMember(projectId, request))
++                .data(projectService.addMember(
++                        projectId,
++                        request,
++                        user.getUserId()
++                ))
+                 .build();
+     }
+ 
+     @GetMapping("/{projectId}/members")
+     public ApiResponse<List<ProjectMemberResponse>> getMembers(
+-            @PathVariable UUID projectId) {
+-
++            @PathVariable UUID projectId,
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
+         return ApiResponse.<List<ProjectMemberResponse>>builder()
+                 .success(true)
+                 .message("Members fetched successfully.")
+-                .data(projectService.getProjectMembers(projectId))
++                .data(projectService.getProjectMembers(
++                        projectId,
++                        user.getUserId()
++                ))
+                 .build();
+     }
+ 
+     @DeleteMapping("/{projectId}/members/{memberId}")
+     public ApiResponse<?> removeMember(
+             @PathVariable UUID projectId,
+-            @PathVariable UUID memberId) {
+-
+-        projectService.removeMember(projectId, memberId);
++            @PathVariable UUID memberId,
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
++        projectService.removeMember(
++                projectId,
++                memberId,
++                user.getUserId()
++        );
+ 
+         return ApiResponse.builder()
+                 .success(true)
+@@ -134,9 +149,19 @@
+                 .build();
+     }
+ 
++    @GetMapping("/my-projects")
++    public ApiResponse<List<MyProjectResponse>> getMyProjects(
++            @AuthenticationPrincipal CustomUserDetails user
++    ) {
++        return ApiResponse.<List<MyProjectResponse>>builder()
++                .success(true)
++                .message("Projects fetched successfully.")
++                .data(projectService.getMyProjects(user.getUserId()))
++                .build();
++    }
++
+     @GetMapping
+     public ResponseEntity<ApiResponse<List<ProjectResponse>>> getProjects() {
+-
+         return ResponseEntity.ok(
+                 ApiResponse.<List<ProjectResponse>>builder()
+                         .success(true)
+@@ -148,8 +173,8 @@
+ 
+     @GetMapping("/{projectId}")
+     public ResponseEntity<ApiResponse<ProjectResponse>> getProject(
+-            @PathVariable UUID projectId) {
+-
++            @PathVariable UUID projectId
++    ) {
+         return ResponseEntity.ok(
+                 ApiResponse.<ProjectResponse>builder()
+                         .success(true)
+@@ -158,4 +183,4 @@
+                         .build()
+         );
+     }
+-}
+\ No newline at end of file
++}
+
+--- a/src/main/java/com/example/qcollect/project/dto/AddProjectMemberRequest.java
++++ b/src/main/java/com/example/qcollect/project/dto/AddProjectMemberRequest.java
+@@ -1,9 +1,6 @@
+ package com.example.qcollect.project.dto;
+ 
+-
+-
+-import com.example.qcollect.common.enums.RoleType;
+-//import com.qcollect.common.enums.RoleType;
++import com.example.qcollect.project.enums.ProjectRole;
+ import jakarta.validation.constraints.NotNull;
+ import lombok.Data;
+ 
+@@ -16,6 +13,5 @@
+     private UUID userId;
+ 
+     @NotNull
+-    private RoleType role;
+-
+-}
+\ No newline at end of file
++    private ProjectRole role;
++}
+
+--- a/src/main/java/com/example/qcollect/project/dto/MyProjectResponse.java
++++ b/src/main/java/com/example/qcollect/project/dto/MyProjectResponse.java
+@@ -0,0 +1,25 @@
++package com.example.qcollect.project.dto;
++
++import lombok.AllArgsConstructor;
++import lombok.Builder;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.util.UUID;
++
++@Getter
++@Setter
++@Builder
++@NoArgsConstructor
++@AllArgsConstructor
++public class MyProjectResponse {
++
++    private UUID projectId;
++
++    private String projectName;
++
++    private UUID roleId;
++
++    private String roleName;
++}
+
+--- a/src/main/java/com/example/qcollect/project/dto/ProjectMembershipResponse.java
++++ b/src/main/java/com/example/qcollect/project/dto/ProjectMembershipResponse.java
+@@ -0,0 +1,23 @@
++package com.example.qcollect.project.dto;
++
++import lombok.AllArgsConstructor;
++import lombok.Builder;
++import lombok.Getter;
++import lombok.NoArgsConstructor;
++import lombok.Setter;
++
++import java.util.UUID;
++
++@Getter
++@Setter
++@Builder
++@NoArgsConstructor
++@AllArgsConstructor
++public class ProjectMembershipResponse {
++
++    private UUID projectId;
++
++    private String projectName;
++
++    private String role;
++}
+
+--- a/src/main/java/com/example/qcollect/project/repository/ProjectMembershipProjection.java
++++ b/src/main/java/com/example/qcollect/project/repository/ProjectMembershipProjection.java
+@@ -0,0 +1,14 @@
++package com.example.qcollect.project.repository;
++
++import java.util.UUID;
++
++public interface ProjectMembershipProjection {
++
++    UUID getProjectId();
++
++    String getProjectName();
++
++    UUID getRoleId();
++
++    String getRoleName();
++}
+
+--- a/src/main/java/com/example/qcollect/project/repository/ProjectUserRepository.java
++++ b/src/main/java/com/example/qcollect/project/repository/ProjectUserRepository.java
+@@ -1,7 +1,6 @@
+ package com.example.qcollect.project.repository;
+ 
+ import com.example.qcollect.project.entity.ProjectUser;
+-import com.example.qcollect.role.entity.Role;
+ import org.springframework.data.jpa.repository.JpaRepository;
+ import org.springframework.data.jpa.repository.Query;
+ import org.springframework.data.repository.query.Param;
+@@ -14,16 +13,27 @@
+ 
+     List<ProjectUser> findByProjectId(UUID projectId);
+ 
++    List<ProjectUser> findByProjectIdAndActiveTrue(UUID projectId);
++
+     List<ProjectUser> findAllByProjectId(UUID projectId);
+ 
+     List<ProjectUser> findByUserId(UUID userId);
+ 
+     long countByProjectIdAndRoleId(UUID projectId, UUID roleId);
+ 
++    long countByProjectIdAndRoleIdAndActiveTrue(UUID projectId, UUID roleId);
++
+     boolean existsByProjectIdAndUserId(UUID projectId, UUID userId);
+ 
++    boolean existsByProjectIdAndUserIdAndActiveTrue(UUID projectId, UUID userId);
++
+     Optional<ProjectUser> findByProjectIdAndUserId(UUID projectId, UUID userId);
+ 
++    Optional<ProjectUser> findByProjectIdAndUserIdAndActiveTrue(
++            UUID projectId,
++            UUID userId
++    );
++
+     void deleteByProjectIdAndUserId(UUID projectId, UUID userId);
+ 
+     boolean existsByProjectIdAndUserIdAndRoleId(
+@@ -32,6 +42,12 @@
+             UUID roleId
+     );
+ 
++    boolean existsByProjectIdAndUserIdAndRoleIdAndActiveTrue(
++            UUID projectId,
++            UUID userId,
++            UUID roleId
++    );
++
+     @Query("""
+         SELECT pu
+         FROM ProjectUser pu
+@@ -40,6 +56,8 @@
+         WHERE pu.projectId = :projectId
+           AND pu.userId = :userId
+           AND r.name = :role
++          AND pu.active = true
++          AND r.active = true
+     """)
+     Optional<ProjectUser> findMembership(
+             @Param("projectId") UUID projectId,
+@@ -50,14 +68,39 @@
+     @Query("""
+         SELECT pu.projectId
+         FROM ProjectUser pu
++        JOIN Project p
++            ON pu.projectId = p.id
+         JOIN Role r
+             ON pu.roleId = r.id
+         WHERE pu.userId = :userId
+           AND r.name = :roleName
+           AND pu.active = true
++          AND p.active = true
++          AND r.active = true
+     """)
+     List<UUID> findProjectIdsByUserIdAndRoleName(
+             @Param("userId") UUID userId,
+             @Param("roleName") String roleName
+     );
+-}
+\ No newline at end of file
++
++    @Query("""
++        SELECT
++            p.id AS projectId,
++            p.name AS projectName,
++            r.id AS roleId,
++            r.name AS roleName
++        FROM ProjectUser pu
++        JOIN Project p
++            ON pu.projectId = p.id
++        JOIN Role r
++            ON pu.roleId = r.id
++        WHERE pu.userId = :userId
++          AND pu.active = true
++          AND p.active = true
++          AND r.active = true
++        ORDER BY p.name ASC
++    """)
++    List<ProjectMembershipProjection> findActiveMembershipsByUserId(
++            @Param("userId") UUID userId
++    );
++}
+
+--- a/src/main/java/com/example/qcollect/project/service/ProjectAuthorizationService.java
++++ b/src/main/java/com/example/qcollect/project/service/ProjectAuthorizationService.java
+@@ -19,8 +19,8 @@
+             UUID userId
+     );
+ 
+-    public void requireProjectMember(
++    void requireProjectMember(
+             UUID projectId,
+             UUID userId
+     );
+-}
+\ No newline at end of file
++}
+
+--- a/src/main/java/com/example/qcollect/project/service/ProjectAuthorizationServiceImpl.java
++++ b/src/main/java/com/example/qcollect/project/service/ProjectAuthorizationServiceImpl.java
+@@ -3,7 +3,6 @@
+ import com.example.qcollect.common.exception.ResourceNotFoundException;
+ import com.example.qcollect.project.enums.ProjectRole;
+ import com.example.qcollect.project.repository.ProjectUserRepository;
+-import com.example.qcollect.project.service.ProjectAuthorizationService;
+ import lombok.RequiredArgsConstructor;
+ import org.springframework.stereotype.Service;
+ 
+@@ -11,63 +10,47 @@
+ 
+ @Service
+ @RequiredArgsConstructor
+-public class ProjectAuthorizationServiceImpl
+-        implements ProjectAuthorizationService {
++public class ProjectAuthorizationServiceImpl implements ProjectAuthorizationService {
+ 
+     private final ProjectUserRepository projectUserRepository;
+ 
+     @Override
+-    public void requireProjectAdmin(
+-            UUID projectId,
+-            UUID userId
+-    ) {
+-
+-        projectUserRepository.findMembership(
+-                projectId,
+-                userId,
+-                ProjectRole.PROJECT_ADMIN.name()
+-        ).orElseThrow(() ->
+-                new ResourceNotFoundException("Only Project Admin allowed."));
++    public void requireProjectAdmin(UUID projectId, UUID userId) {
++        requireRole(projectId, userId, ProjectRole.PROJECT_ADMIN);
+     }
+ 
+     @Override
+-    public void requireAccessor(
+-            UUID projectId,
+-            UUID userId
+-    ) {
++    public void requireAccessor(UUID projectId, UUID userId) {
++        requireRole(projectId, userId, ProjectRole.ACCESSOR);
++    }
+ 
+-        projectUserRepository.findMembership(
+-                projectId,
+-                userId,
+-                ProjectRole.ACCESSOR.name()
+-        ).orElseThrow(() ->
+-                new ResourceNotFoundException("Only Accessor allowed."));
++    @Override
++    public void requireQualityChecker(UUID projectId, UUID userId) {
++        requireRole(projectId, userId, ProjectRole.QUALITY_CHECKER);
+     }
+ 
+     @Override
+-    public void requireQualityChecker(
++    public void requireProjectMember(UUID projectId, UUID userId) {
++        projectUserRepository
++                .findByProjectIdAndUserIdAndActiveTrue(projectId, userId)
++                .orElseThrow(() ->
++                        new ResourceNotFoundException(
++                                "User is not an active member of this project."
++                        ));
++    }
++
++    private void requireRole(
+             UUID projectId,
+-            UUID userId
++            UUID userId,
++            ProjectRole role
+     ) {
+-
+         projectUserRepository.findMembership(
+                 projectId,
+                 userId,
+-                ProjectRole.QUALITY_CHECKER.name()
++                role.name()
+         ).orElseThrow(() ->
+-                new ResourceNotFoundException("Only Quality Checker allowed."));
+-    }
+-    @Override
+-    public void requireProjectMember(
+-            UUID projectId,
+-            UUID userId
+-    ) {
+-
+-        projectUserRepository
+-                .findByProjectIdAndUserId(projectId, userId)
+-                .orElseThrow(() ->
+-                        new ResourceNotFoundException(
+-                                "User is not a member of this project."
+-                        ));
++                new ResourceNotFoundException(
++                        "Required project role: " + role.name()
++                ));
+     }
+-}
+\ No newline at end of file
++}
+
+--- a/src/main/java/com/example/qcollect/project/service/ProjectService.java
++++ b/src/main/java/com/example/qcollect/project/service/ProjectService.java
+@@ -1,6 +1,13 @@
+ package com.example.qcollect.project.service;
+ 
+-import com.example.qcollect.project.dto.*;
++import com.example.qcollect.project.dto.AddProjectMemberRequest;
++import com.example.qcollect.project.dto.CreateAccessorRequest;
++import com.example.qcollect.project.dto.CreateProjectAdminRequest;
++import com.example.qcollect.project.dto.CreateProjectRequest;
++import com.example.qcollect.project.dto.CreateQualityCheckerRequest;
++import com.example.qcollect.project.dto.MyProjectResponse;
++import com.example.qcollect.project.dto.ProjectMemberResponse;
++import com.example.qcollect.project.dto.ProjectResponse;
+ import jakarta.validation.Valid;
+ 
+ import java.util.List;
+@@ -8,50 +15,49 @@
+ 
+ public interface ProjectService {
+ 
+-    // Tenant Admin creates project
+     ProjectResponse createProject(
+             CreateProjectRequest request,
+             UUID loggedInUserId
+     );
+-    // Tenant Admin assigns Project Admin
++
+     void createProjectAdmin(
+             UUID projectId,
+             CreateProjectAdminRequest request,
+             UUID loggedInTenantAdminId
+     );
+ 
+-    // Project Admin creates Accessor
+     void createAccessor(
+             UUID projectId,
+             CreateAccessorRequest request,
+             UUID loggedInUserId
+     );
+ 
+-    // Project Admin creates QC
+     void createQualityChecker(
+             UUID projectId,
+             CreateQualityCheckerRequest request,
+             UUID loggedInUserId
+     );
+ 
+-    // Existing methods
+     List<ProjectMemberResponse> getProjectMembers(
+-            UUID projectId
++            UUID projectId,
++            UUID loggedInUserId
+     );
+ 
+     void removeMember(
+             UUID projectId,
+-            UUID memberId
++            UUID memberId,
++            UUID loggedInUserId
+     );
+ 
+     ProjectMemberResponse addMember(
+             UUID projectId,
+-            @Valid AddProjectMemberRequest request
++            @Valid AddProjectMemberRequest request,
++            UUID loggedInUserId
+     );
+ 
+     List<ProjectResponse> getProjects();
+ 
+-    ProjectResponse getProject(
+-            UUID projectId
+-    );
+-}
+\ No newline at end of file
++    List<MyProjectResponse> getMyProjects(UUID userId);
++
++    ProjectResponse getProject(UUID projectId);
++}
+
+--- a/src/main/java/com/example/qcollect/project/service/ProjectServiceImpl.java
++++ b/src/main/java/com/example/qcollect/project/service/ProjectServiceImpl.java
+@@ -8,6 +8,7 @@
+ import com.example.qcollect.project.dto.*;
+ import com.example.qcollect.project.entity.Project;
+ import com.example.qcollect.project.entity.ProjectUser;
++import com.example.qcollect.project.enums.ProjectRole;
+ import com.example.qcollect.project.repository.ProjectRepository;
+ import com.example.qcollect.project.repository.ProjectUserRepository;
+ import com.example.qcollect.project.service.ProjectService;
+@@ -41,6 +42,7 @@
+     private final NotificationHelper notificationHelper;
+     private final AuditHelper auditHelper;
+     private final ProjectMapper projectMapper;
++    private final ProjectAuthorizationService projectAuthorizationService;
+ 
+     @Override
+     public ProjectResponse createProject(
+@@ -185,7 +187,7 @@
+                 .orElseThrow(() ->
+                         new ResourceNotFoundException("PROJECT_ADMIN role not found."));
+ 
+-        if (!projectUserRepository.existsByProjectIdAndUserIdAndRoleId(
++        if (!projectUserRepository.existsByProjectIdAndUserIdAndRoleIdAndActiveTrue(
+                 projectId,
+                 loggedInUserId,
+                 projectAdminRole.getId())) {
+@@ -260,7 +262,7 @@
+                 .orElseThrow(() ->
+                         new ResourceNotFoundException("PROJECT_ADMIN role not found."));
+ 
+-        if (!projectUserRepository.existsByProjectIdAndUserIdAndRoleId(
++        if (!projectUserRepository.existsByProjectIdAndUserIdAndRoleIdAndActiveTrue(
+                 projectId,
+                 loggedInUserId,
+                 projectAdminRole.getId())) {
+@@ -322,14 +324,17 @@
+     @Override
+     @Transactional(readOnly = true)
+     public List<ProjectMemberResponse> getProjectMembers(
+-            UUID projectId) {
++            UUID projectId,
++            UUID loggedInUserId) {
+ 
+         Project project = projectRepository.findById(projectId)
+                 .orElseThrow(() ->
+                         new ResourceNotFoundException("Project not found."));
+ 
++        requireCanManageMembers(project, loggedInUserId, null);
++
+         List<ProjectUser> members =
+-                projectUserRepository.findByProjectId(project.getId());
++                projectUserRepository.findByProjectIdAndActiveTrue(project.getId());
+ 
+         List<ProjectMemberResponse> response =
+                 new ArrayList<>();
+@@ -374,15 +379,20 @@
+ 
+     @Override
+     public void removeMember(
+-
+             UUID projectId,
+-
+-            UUID memberId
++            UUID memberId,
++            UUID loggedInUserId
+     ) {
+ 
++        Project project = projectRepository.findById(projectId)
++                .orElseThrow(() ->
++                        new ResourceNotFoundException("Project not found."));
++
++        requireCanManageMembers(project, loggedInUserId, null);
++
+         ProjectUser projectUser =
+                 projectUserRepository
+-                        .findByProjectIdAndUserId(
++                        .findByProjectIdAndUserIdAndActiveTrue(
+                                 projectId,
+                                 memberId)
+                         .orElseThrow(() ->
+@@ -401,7 +411,7 @@
+ 
+             long adminCount =
+                     projectUserRepository
+-                            .countByProjectIdAndRoleId(
++                            .countByProjectIdAndRoleIdAndActiveTrue(
+                                     projectId,
+                                     role.getId());
+ 
+@@ -414,11 +424,18 @@
+ 
+         }
+ 
++        if (RoleType.PROJECT_ADMIN.name().equals(role.getName())
++                && !isTenantAdminForProject(project, loggedInUserId)) {
++            throw new BadRequestException(
++                    "Only Tenant Admin can remove a Project Admin."
++            );
++        }
++
+         projectUserRepository.delete(projectUser);
+ 
+         auditHelper.log(
+ 
+-                memberId,
++                loggedInUserId,
+ 
+                 "PROJECT",
+ 
+@@ -434,10 +451,9 @@
+ 
+     @Override
+     public ProjectMemberResponse addMember(
+-
+             UUID projectId,
+-
+-            AddProjectMemberRequest request
++            AddProjectMemberRequest request,
++            UUID loggedInUserId
+     ) {
+ 
+         Project project =
+@@ -460,6 +476,12 @@
+ 
+         }
+ 
++        requireCanManageMembers(
++                project,
++                loggedInUserId,
++                request.getRole()
++        );
++
+         Role role =
+                 roleRepository.findByName(
+                                 request.getRole().name())
+@@ -528,6 +550,25 @@
+ 
+     @Override
+     @Transactional(readOnly = true)
++    public List<MyProjectResponse> getMyProjects(UUID userId) {
++
++        if (!userRepository.existsById(userId)) {
++            throw new ResourceNotFoundException("User not found.");
++        }
++
++        return projectUserRepository.findActiveMembershipsByUserId(userId)
++                .stream()
++                .map(membership -> MyProjectResponse.builder()
++                        .projectId(membership.getProjectId())
++                        .projectName(membership.getProjectName())
++                        .roleId(membership.getRoleId())
++                        .roleName(membership.getRoleName())
++                        .build())
++                .toList();
++    }
++
++    @Override
++    @Transactional(readOnly = true)
+     public ProjectResponse getProject(UUID projectId) {
+ 
+         Project project = projectRepository.findById(projectId)
+@@ -536,20 +577,37 @@
+ 
+         return projectMapper.toResponse(project);
+     }
+-    public void requireProjectMember(
+-            UUID projectId,
+-            UUID userId
++    private void requireCanManageMembers(
++            Project project,
++            UUID loggedInUserId,
++            ProjectRole targetRole
+     ) {
++        if (isTenantAdminForProject(project, loggedInUserId)) {
++            return;
++        }
+ 
+-        if (!projectUserRepository.existsByProjectIdAndUserId(
+-                projectId,
+-                userId
+-        )) {
+-
++        if (targetRole == ProjectRole.PROJECT_ADMIN) {
+             throw new BadRequestException(
+-                    "You are not assigned to this project."
++                    "Only Tenant Admin can assign a Project Admin."
+             );
+         }
+ 
++        projectAuthorizationService.requireProjectAdmin(
++                project.getId(),
++                loggedInUserId
++        );
++    }
++
++    private boolean isTenantAdminForProject(
++            Project project,
++            UUID userId
++    ) {
++        User user = userRepository.findById(userId)
++                .orElseThrow(() ->
++                        new ResourceNotFoundException("User not found."));
++
++        return RoleType.TENANT_ADMIN.name().equals(
++                user.getSystemRole().getName()
++        ) && project.getTenantId().equals(user.getTenantId());
+     }
+-}
+\ No newline at end of file
++}

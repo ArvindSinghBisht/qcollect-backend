@@ -1,0 +1,14 @@
+package com.example.qcollect.dashboard.dto;
+
+import lombok.Builder;
+import lombok.Data;
+
+@Data
+@Builder
+public class ProgressResponse {
+
+    private Long completed;
+
+    private Long remaining;
+
+}
