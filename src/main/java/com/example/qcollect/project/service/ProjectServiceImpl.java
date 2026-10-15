@@ -16,10 +16,10 @@ import com.example.qcollect.role.entity.Role;
 import com.example.qcollect.role.repository.RoleRepository;
 import com.example.qcollect.tenant.entity.Tenant;
 import com.example.qcollect.tenant.repository.TenantRepository;
+import com.example.qcollect.user.EmailAddress;
 import com.example.qcollect.user.entity.User;
 import com.example.qcollect.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import com.example.qcollect.project.mapper.ProjectMapper;
@@ -28,6 +28,9 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.Optional;
 import com.example.qcollect.notification.enums.NotificationType;
 import com.example.qcollect.project.entity.ProjectInvitation;
 import com.example.qcollect.project.repository.ProjectInvitationRepository;
@@ -42,7 +45,7 @@ public class ProjectServiceImpl implements ProjectService {
     private final TenantRepository tenantRepository;
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
-    private final PasswordEncoder passwordEncoder;
+    private final ProjectUserIdentityService projectUserIdentityService;
     private final NotificationHelper notificationHelper;
     private final AuditHelper auditHelper;
     private final ProjectMapper projectMapper;
@@ -126,27 +129,15 @@ public class ProjectServiceImpl implements ProjectService {
                     "Project does not belong to your tenant.");
         }
 
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BadRequestException("Email already exists.");
-        }
-
-        Role systemUserRole = roleRepository.findByName("USER")
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("USER role not found."));
-
-        User projectAdmin = new User();
-
-        projectAdmin.setTenantId(project.getTenantId());
-        projectAdmin.setSystemRole(systemUserRole);
-        projectAdmin.setFirstName(request.getFirstName());
-        projectAdmin.setLastName(request.getLastName());
-        projectAdmin.setEmail(request.getEmail());
-        projectAdmin.setPhone(request.getPhone());
-        projectAdmin.setPassword(
-                passwordEncoder.encode(request.getPassword()));
-        projectAdmin.setActive(true);
-
-        projectAdmin = userRepository.save(projectAdmin);
+        ProjectUserAccount account = projectUserIdentityService.resolveProjectUser(
+                project,
+                request.getEmail(),
+                request.getFirstName(),
+                request.getLastName(),
+                request.getPhone(),
+                request.getPassword()
+        );
+        User projectAdmin = account.user();
 
         Role projectAdminRole = roleRepository.findByName(
                         RoleType.PROJECT_ADMIN.name())
@@ -154,28 +145,17 @@ public class ProjectServiceImpl implements ProjectService {
                         new ResourceNotFoundException(
                                 "PROJECT_ADMIN role not found."));
 
-        ProjectUser projectUser = new ProjectUser();
-
-        projectUser.setProjectId(projectId);
-        projectUser.setUserId(projectAdmin.getId());
-        projectUser.setRoleId(projectAdminRole.getId());
-
-        projectUserRepository.save(projectUser);
+        assignMembership(project, projectAdmin, projectAdminRole);
 
         auditHelper.log(
                 tenantAdmin.getId(),
                 "PROJECT",
                 "CREATE_PROJECT_ADMIN",
                 project.getId(),
-                "Created Project Admin : " + projectAdmin.getEmail(),
+                membershipAudit("Project Admin", projectAdmin.getEmail(), account.created()),
                 "SYSTEM");
 
-        notificationHelper.notifyUser(
-                projectAdmin.getId(),
-                "Project Admin Account Created",
-                "You have been assigned as Project Admin for project : "
-                        + project.getName(),
-                NotificationType.PROJECT);
+        notifyMembership(projectAdmin, project, "Project Admin", account.created());
     }
 
     @Override
@@ -202,55 +182,32 @@ public class ProjectServiceImpl implements ProjectService {
                     "Only Project Admin can create Accessors.");
         }
 
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BadRequestException("Email already exists.");
-        }
-
-        Role systemUserRole = roleRepository.findByName("USER")
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("USER role not found."));
-
-        User accessor = new User();
-
-        accessor.setTenantId(project.getTenantId());
-        accessor.setSystemRole(systemUserRole);
-        accessor.setFirstName(request.getFirstName());
-        accessor.setLastName(request.getLastName());
-        accessor.setEmail(request.getEmail());
-        accessor.setPhone(request.getPhone());
-        accessor.setPassword(
-                passwordEncoder.encode(request.getPassword()));
-        accessor.setActive(true);
-
-        accessor = userRepository.save(accessor);
+        ProjectUserAccount account = projectUserIdentityService.resolveProjectUser(
+                project,
+                request.getEmail(),
+                request.getFirstName(),
+                request.getLastName(),
+                request.getPhone(),
+                request.getPassword()
+        );
+        User accessor = account.user();
 
         Role accessorRole = roleRepository.findByName(
                         RoleType.ACCESSOR.name())
                 .orElseThrow(() ->
                         new ResourceNotFoundException("ACCESSOR role not found."));
 
-        ProjectUser projectUser = new ProjectUser();
-
-        projectUser.setProjectId(projectId);
-        projectUser.setUserId(accessor.getId());
-        projectUser.setRoleId(accessorRole.getId());
-
-        projectUserRepository.save(projectUser);
+        assignMembership(project, accessor, accessorRole);
 
         auditHelper.log(
                 loggedInUserId,
                 "PROJECT",
                 "CREATE_ACCESSOR",
                 projectId,
-                "Created Accessor : " + accessor.getEmail(),
+                membershipAudit("Accessor", accessor.getEmail(), account.created()),
                 "SYSTEM");
 
-        notificationHelper.notifyUser(
-                accessor.getId(),
-                "Accessor Account Created",
-                "You have been assigned as Accessor for project : "
-                        + project.getName(),
-                NotificationType.PROJECT);
+        notifyMembership(accessor, project, "Accessor", account.created());
     }
 
     @Override
@@ -277,55 +234,32 @@ public class ProjectServiceImpl implements ProjectService {
                     "Only Project Admin can create Quality Checkers.");
         }
 
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BadRequestException("Email already exists.");
-        }
-
-        Role systemUserRole = roleRepository.findByName("USER")
-                .orElseThrow(() ->
-                        new ResourceNotFoundException("USER role not found."));
-
-        User qc = new User();
-
-        qc.setTenantId(project.getTenantId());
-        qc.setSystemRole(systemUserRole);
-        qc.setFirstName(request.getFirstName());
-        qc.setLastName(request.getLastName());
-        qc.setEmail(request.getEmail());
-        qc.setPhone(request.getPhone());
-        qc.setPassword(
-                passwordEncoder.encode(request.getPassword()));
-        qc.setActive(true);
-
-        qc = userRepository.save(qc);
+        ProjectUserAccount account = projectUserIdentityService.resolveProjectUser(
+                project,
+                request.getEmail(),
+                request.getFirstName(),
+                request.getLastName(),
+                request.getPhone(),
+                request.getPassword()
+        );
+        User qc = account.user();
 
         Role qcRole = roleRepository.findByName(
                         RoleType.QUALITY_CHECKER.name())
                 .orElseThrow(() ->
                         new ResourceNotFoundException("QUALITY_CHECKER role not found."));
 
-        ProjectUser projectUser = new ProjectUser();
-
-        projectUser.setProjectId(projectId);
-        projectUser.setUserId(qc.getId());
-        projectUser.setRoleId(qcRole.getId());
-
-        projectUserRepository.save(projectUser);
+        assignMembership(project, qc, qcRole);
 
         auditHelper.log(
                 loggedInUserId,
                 "PROJECT",
                 "CREATE_QUALITY_CHECKER",
                 projectId,
-                "Created Quality Checker : " + qc.getEmail(),
+                membershipAudit("Quality Checker", qc.getEmail(), account.created()),
                 "SYSTEM");
 
-        notificationHelper.notifyUser(
-                qc.getId(),
-                "Quality Checker Account Created",
-                "You have been assigned as Quality Checker for project : "
-                        + project.getName(),
-                NotificationType.PROJECT);
+        notifyMembership(qc, project, "Quality Checker", account.created());
     }
 
     @Override
@@ -496,24 +430,7 @@ public class ProjectServiceImpl implements ProjectService {
                                 new ResourceNotFoundException(
                                         "Role not found."));
 
-        if (projectUserRepository.existsByProjectIdAndUserId(
-                projectId,
-                user.getId())) {
-
-            throw new BadRequestException(
-                    "User already assigned.");
-
-        }
-
-        ProjectUser projectUser = new ProjectUser();
-
-        projectUser.setProjectId(projectId);
-
-        projectUser.setUserId(user.getId());
-
-        projectUser.setRoleId(role.getId());
-
-        projectUserRepository.save(projectUser);
+        ProjectUser projectUser = assignMembership(project, user, role);
 
         notificationHelper.notifyUser(
 
@@ -527,22 +444,144 @@ public class ProjectServiceImpl implements ProjectService {
                 NotificationType.PROJECT
         );
 
-        return ProjectMemberResponse.builder()
+        return toMemberResponse(projectUser, user, role);
+    }
 
-                .id(projectUser.getId())
+    @Override
+    public List<ProjectMemberResponse> importMembers(
+            UUID projectId,
+            List<ImportProjectMemberRequest> rows,
+            UUID loggedInUserId
+    ) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() ->
+                        new ResourceNotFoundException("Project not found."));
 
-                .userId(user.getId())
+        if (rows == null || rows.isEmpty()) {
+            throw new BadRequestException("Import does not contain any members.");
+        }
 
-                .userName(
-                        user.getFirstName()
-                                + " "
-                                + user.getLastName())
+        Set<String> seenEmails = new HashSet<>();
+        for (ImportProjectMemberRequest row : rows) {
+            if (row == null || row.getRole() == null) {
+                throw new BadRequestException("Each imported member needs a project role.");
+            }
+            String email = EmailAddress.normalize(row.getEmail());
+            if (email == null) {
+                throw new BadRequestException("Email is required.");
+            }
+            if (!seenEmails.add(email)) {
+                throw new BadRequestException("Duplicate email in import: " + email);
+            }
+            requireCanManageMembers(project, loggedInUserId, row.getRole());
+        }
 
-                .email(user.getEmail())
+        List<ProjectMemberResponse> responses = new ArrayList<>();
 
-                .role(role.getName())
+        for (ImportProjectMemberRequest row : rows) {
+            String email = EmailAddress.normalize(row.getEmail());
+            requireCanManageMembers(project, loggedInUserId, row.getRole());
 
-                .build();
+            ProjectUserAccount account = projectUserIdentityService.resolveProjectUser(
+                    project,
+                    email,
+                    row.getFirstName(),
+                    row.getLastName(),
+                    row.getPhone(),
+                    row.getPassword()
+            );
+
+            Role role = roleRepository.findByName(row.getRole().name())
+                    .orElseThrow(() ->
+                            new ResourceNotFoundException("Role not found."));
+
+            ProjectUser membership = assignMembership(project, account.user(), role);
+            String roleLabel = roleLabel(role.getName());
+
+            auditHelper.log(
+                    loggedInUserId,
+                    "PROJECT",
+                    "IMPORT_MEMBER",
+                    projectId,
+                    membershipAudit(roleLabel, account.user().getEmail(), account.created()),
+                    "SYSTEM"
+            );
+            notifyMembership(account.user(), project, roleLabel, account.created());
+            responses.add(toMemberResponse(membership, account.user(), role));
+        }
+
+        return responses;
+    }
+
+    @Override
+    public ProjectMemberResponse acceptInvitation(
+            String token,
+            AcceptInvitationRequest request
+    ) {
+        if (token == null || token.isBlank()) {
+            throw new BadRequestException("Invitation is invalid.");
+        }
+
+        ProjectInvitation invitation = projectInvitationRepository.findByToken(token.trim())
+                .orElseThrow(() ->
+                        new BadRequestException("Invitation is invalid."));
+
+        if (!"PENDING".equalsIgnoreCase(invitation.getStatus())) {
+            throw new BadRequestException("Invitation is no longer pending.");
+        }
+
+        if (invitation.getExpiresAt() != null
+                && invitation.getExpiresAt().isBefore(LocalDateTime.now())) {
+            throw new BadRequestException("Invitation has expired.");
+        }
+
+        Project project = invitation.getProject();
+        if (project == null) {
+            throw new ResourceNotFoundException("Project not found.");
+        }
+
+        Role role = invitation.getRole();
+        if (role == null || role.getName() == null) {
+            throw new ResourceNotFoundException("Role not found.");
+        }
+
+        AcceptInvitationRequest details = request == null
+                ? new AcceptInvitationRequest()
+                : request;
+
+        ProjectUserAccount account = projectUserIdentityService.resolveProjectUser(
+                project,
+                invitation.getEmail(),
+                details.getFirstName(),
+                details.getLastName(),
+                details.getPhone(),
+                details.getPassword()
+        );
+        User user = account.user();
+        if (account.created()) {
+            user.setEmailVerified(true);
+            user = userRepository.save(user);
+        }
+
+        ProjectUser membership = assignMembership(project, user, role);
+
+        invitation.setStatus("ACCEPTED");
+        invitation.setAcceptedAt(LocalDateTime.now());
+        invitation.setEmail(user.getEmail());
+        projectInvitationRepository.save(invitation);
+
+        String roleLabel = roleLabel(role.getName());
+        auditHelper.log(
+                user.getId(),
+                "PROJECT",
+                "ACCEPT_INVITATION",
+                project.getId(),
+                membershipAudit(roleLabel, user.getEmail(), account.created()),
+                "SYSTEM"
+        );
+        notifyMembership(user, project, roleLabel, account.created());
+
+        return toMemberResponse(membership, user, role);
     }
 
     @Override
@@ -641,8 +680,25 @@ public class ProjectServiceImpl implements ProjectService {
                 ProjectRole.valueOf(role.getName())
         );
 
+        String email = EmailAddress.normalize(request.getEmail());
+        if (email == null) {
+            throw new BadRequestException("Email is required.");
+        }
+
+        userRepository.findByEmail(email).ifPresent(existing -> {
+            if (!project.getTenantId().equals(existing.getTenantId())) {
+                throw new BadRequestException("User belongs to another tenant.");
+            }
+            if (projectUserRepository.existsByProjectIdAndUserIdAndActiveTrue(
+                    projectId,
+                    existing.getId())) {
+                throw new BadRequestException(
+                        "User is already an active member of this project.");
+            }
+        });
+
         if (projectInvitationRepository.existsByEmailAndProjectId(
-                request.getEmail(),
+                email,
                 projectId)) {
 
             throw new BadRequestException(
@@ -654,7 +710,7 @@ public class ProjectServiceImpl implements ProjectService {
         ProjectInvitation invitation = new ProjectInvitation();
 
         invitation.setProject(project);
-        invitation.setEmail(request.getEmail());
+        invitation.setEmail(email);
         invitation.setRole(role);
         invitation.setToken(token);
         invitation.setStatus("PENDING");
@@ -663,7 +719,7 @@ public class ProjectServiceImpl implements ProjectService {
         projectInvitationRepository.save(invitation);
 
         emailService.sendProjectInvitation(
-                request.getEmail(),
+                email,
                 project.getName(),
                 token
         );
@@ -673,8 +729,89 @@ public class ProjectServiceImpl implements ProjectService {
                 "PROJECT",
                 "INVITE_MEMBER",
                 projectId,
-                "Invitation sent to " + request.getEmail(),
+                "Invitation sent to " + email,
                 "SYSTEM"
         );
+    }
+
+    private ProjectUser assignMembership(Project project, User user, Role role) {
+        Optional<ProjectUser> existing = projectUserRepository.findByProjectIdAndUserId(
+                project.getId(),
+                user.getId()
+        );
+
+        if (existing.isPresent()) {
+            ProjectUser membership = existing.get();
+            if (!Boolean.FALSE.equals(membership.getActive())) {
+                throw new BadRequestException(
+                        "User is already an active member of this project.");
+            }
+            membership.setActive(true);
+            membership.setRoleId(role.getId());
+            return projectUserRepository.save(membership);
+        }
+
+        ProjectUser projectUser = new ProjectUser();
+        projectUser.setProjectId(project.getId());
+        projectUser.setUserId(user.getId());
+        projectUser.setRoleId(role.getId());
+        projectUser.setActive(true);
+        return projectUserRepository.save(projectUser);
+    }
+
+    private void notifyMembership(
+            User user,
+            Project project,
+            String roleLabel,
+            boolean accountCreated
+    ) {
+        if (accountCreated) {
+            notificationHelper.notifyUser(
+                    user.getId(),
+                    roleLabel + " Account Created",
+                    "You have been assigned as " + roleLabel + " for project : "
+                            + project.getName(),
+                    NotificationType.PROJECT
+            );
+            return;
+        }
+
+        notificationHelper.notifyUser(
+                user.getId(),
+                "Project Assignment",
+                "You have been added to project : " + project.getName()
+                        + " as " + roleLabel + ".",
+                NotificationType.PROJECT
+        );
+    }
+
+    private String membershipAudit(String roleLabel, String email, boolean accountCreated) {
+        if (accountCreated) {
+            return "Created " + roleLabel + " : " + email;
+        }
+        return "Assigned existing user as " + roleLabel + " : " + email;
+    }
+
+    private String roleLabel(String roleName) {
+        return switch (roleName) {
+            case "PROJECT_ADMIN" -> "Project Admin";
+            case "ACCESSOR" -> "Accessor";
+            case "QUALITY_CHECKER" -> "Quality Checker";
+            default -> roleName;
+        };
+    }
+
+    private ProjectMemberResponse toMemberResponse(
+            ProjectUser membership,
+            User user,
+            Role role
+    ) {
+        return ProjectMemberResponse.builder()
+                .id(membership.getId())
+                .userId(user.getId())
+                .userName(user.getFirstName() + " " + user.getLastName())
+                .email(user.getEmail())
+                .role(role.getName())
+                .build();
     }
 }

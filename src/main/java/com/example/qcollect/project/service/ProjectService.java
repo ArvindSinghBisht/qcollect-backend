@@ -1,10 +1,12 @@
 package com.example.qcollect.project.service;
 
-import   com.example.qcollect.project.dto.AddProjectMemberRequest;
+import   com.example.qcollect.project.dto.AcceptInvitationRequest;
+import com.example.qcollect.project.dto.AddProjectMemberRequest;
 import com.example.qcollect.project.dto.CreateAccessorRequest;
 import com.example.qcollect.project.dto.CreateProjectAdminRequest;
 import com.example.qcollect.project.dto.CreateProjectRequest;
 import com.example.qcollect.project.dto.CreateQualityCheckerRequest;
+import com.example.qcollect.project.dto.ImportProjectMemberRequest;
 import com.example.qcollect.project.dto.MyProjectResponse;
 import com.example.qcollect.project.dto.ProjectMemberResponse;
 import com.example.qcollect.project.dto.ProjectResponse;
@@ -63,6 +65,19 @@ public interface ProjectService {
             UUID projectId,
             @Valid AddProjectMemberRequest request,
             UUID loggedInUserId
+    );
+
+
+    List<ProjectMemberResponse> importMembers(
+            UUID projectId,
+            @Valid List<@Valid ImportProjectMemberRequest> rows,
+            UUID loggedInUserId
+    );
+
+
+    ProjectMemberResponse acceptInvitation(
+            String token,
+            AcceptInvitationRequest request
     );
 
 

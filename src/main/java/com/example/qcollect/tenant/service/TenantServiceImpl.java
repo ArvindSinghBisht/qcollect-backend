@@ -8,6 +8,7 @@ import com.example.qcollect.tenant.dto.CreateTenantRequest;
 import com.example.qcollect.tenant.dto.TenantResponse;
 import com.example.qcollect.tenant.entity.Tenant;
 import com.example.qcollect.tenant.repository.TenantRepository;
+import com.example.qcollect.user.EmailAddress;
 import com.example.qcollect.user.entity.User;
 import com.example.qcollect.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -66,7 +67,12 @@ public class TenantServiceImpl implements TenantService {
                 .orElseThrow(() ->
                         new BadRequestException("Tenant not found."));
 
-        if (userRepository.existsByEmail(request.getEmail())) {
+        String email = EmailAddress.normalize(request.getEmail());
+        if (email == null) {
+            throw new BadRequestException("Email is required.");
+        }
+
+        if (userRepository.existsByEmail(email)) {
             throw new BadRequestException("Email already exists.");
         }
 
@@ -87,7 +93,7 @@ public class TenantServiceImpl implements TenantService {
 
         user.setLastName(request.getLastName());
 
-        user.setEmail(request.getEmail());
+        user.setEmail(email);
 
         user.setPhone(request.getPhone());
 

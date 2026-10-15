@@ -11,6 +11,7 @@ import com.example.qcollect.project.dto.ProjectMembershipResponse;
 import com.example.qcollect.project.repository.ProjectUserRepository;
 import com.example.qcollect.role.entity.Role;
 import com.example.qcollect.role.repository.RoleRepository;
+import com.example.qcollect.user.EmailAddress;
 import com.example.qcollect.user.entity.User;
 import com.example.qcollect.user.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
@@ -43,7 +44,12 @@ public class AuthServiceImpl implements AuthService {
     @Override
     public void register(RegisterRequest request) {
 
-        if (userRepository.existsByEmail(request.getEmail())) {
+        String email = EmailAddress.normalize(request.getEmail());
+        if (email == null) {
+            throw new BadRequestException("Email is required.");
+        }
+
+        if (userRepository.existsByEmail(email)) {
             throw new BadRequestException("Email already exists.");
         }
 
@@ -63,7 +69,7 @@ public class AuthServiceImpl implements AuthService {
         user.setSystemRole(superAdminRole);
         user.setFirstName(request.getFirstName());
         user.setLastName(request.getLastName());
-        user.setEmail(request.getEmail());
+        user.setEmail(email);
         user.setPhone(request.getPhone());
         user.setPassword(passwordEncoder.encode(request.getPassword()));
         user.setActive(true);

@@ -110,6 +110,23 @@ public class ProjectController {
                 .build();
     }
 
+    @PostMapping("/{projectId}/members/import")
+    public ApiResponse<List<ProjectMemberResponse>> importMembers(
+            @PathVariable UUID projectId,
+            @Valid @RequestBody List<@Valid ImportProjectMemberRequest> rows,
+            @AuthenticationPrincipal CustomUserDetails user
+    ) {
+        return ApiResponse.<List<ProjectMemberResponse>>builder()
+                .success(true)
+                .message("Members imported successfully.")
+                .data(projectService.importMembers(
+                        projectId,
+                        rows,
+                        user.getUserId()
+                ))
+                .build();
+    }
+
     @GetMapping("/{projectId}/members")
     public ApiResponse<List<ProjectMemberResponse>> getMembers(
             @PathVariable UUID projectId,
