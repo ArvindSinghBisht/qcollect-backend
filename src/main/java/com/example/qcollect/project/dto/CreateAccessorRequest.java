@@ -1,5 +1,7 @@
 package com.example.qcollect.project.dto;
 
+import com.example.qcollect.common.jackson.TrimStringDeserializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -35,6 +37,7 @@ public class CreateAccessorRequest {
 
     @NotBlank(message = "Email is required.")
     @Email(message = "Please enter a valid email address.")
+    @JsonDeserialize(using = TrimStringDeserializer.class)
     private String email;
 
     @NotBlank(message = "Phone number is required.")

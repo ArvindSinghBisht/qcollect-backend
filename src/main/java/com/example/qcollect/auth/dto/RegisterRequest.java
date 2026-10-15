@@ -2,6 +2,8 @@ package com.example.qcollect.auth.dto;
 
 
 
+import com.example.qcollect.common.jackson.TrimStringDeserializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
@@ -15,6 +17,7 @@ public class RegisterRequest {
     private String lastName;
 
     @Email
+    @JsonDeserialize(using = TrimStringDeserializer.class)
     private String email;
 
     @NotBlank

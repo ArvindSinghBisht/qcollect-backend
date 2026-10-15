@@ -26,6 +26,9 @@ import com.example.qcollect.tenant.repository.TenantRepository;
 import com.example.qcollect.user.EmailAddress;
 import com.example.qcollect.user.entity.User;
 import com.example.qcollect.user.repository.UserRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.validation.Validation;
+import jakarta.validation.Validator;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -462,6 +465,34 @@ class ProjectServiceImplMembershipTest {
                 .orElseThrow()
                 .getUserId());
         assertEquals("alice@example.com", EmailAddress.normalize("   AlIcE@ExAmPlE.com   "));
+    }
+
+    @Test
+    void paddedEmailPassesValidationAndMatchesExistingAccount() throws Exception {
+        User existing = accessorOnProjectA();
+        ObjectMapper mapper = new ObjectMapper();
+        Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
+        CreateAccessorRequest request = mapper.readValue(
+                """
+                {"firstName":"Ada","lastName":"Lovelace","email":"  Alice@Example.com  ","phone":"9876543210","password":"ignored-password"}
+                """,
+                CreateAccessorRequest.class
+        );
+
+        assertTrue(validator.validate(request).isEmpty());
+        assertEquals("Alice@Example.com", request.getEmail());
+        assertEquals("alice@example.com", EmailAddress.normalize(request.getEmail()));
+
+        service.createAccessor(projectB.getId(), request, projectAdmin.getId());
+
+        assertEquals(0, userInserts.get());
+        assertEquals(existing.getId(), membershipsFor(existing.getId()).stream()
+                .filter(membership -> membership.getProjectId().equals(projectB.getId()))
+                .findFirst()
+                .orElseThrow()
+                .getUserId());
+        assertEquals("kept-hash", existing.getPassword());
+        assertEquals("USER", existing.getSystemRole().getName());
     }
 
     @Test

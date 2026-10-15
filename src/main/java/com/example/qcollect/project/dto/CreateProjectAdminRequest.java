@@ -1,5 +1,7 @@
 package com.example.qcollect.project.dto;
 
+import com.example.qcollect.common.jackson.TrimStringDeserializer;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
@@ -14,6 +16,7 @@ public class CreateProjectAdminRequest {
 
     @Email
     @NotBlank
+    @JsonDeserialize(using = TrimStringDeserializer.class)
     private String email;
 
     @NotBlank
