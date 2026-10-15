@@ -54,4 +54,8 @@ public class CreateAccessorRequest {
             message = "Password must be between 8 and 100 characters."
     )
     private String password;
+
+    public void setEmail(String email) {
+        this.email = email == null ? null : email.trim();
+    }
 }

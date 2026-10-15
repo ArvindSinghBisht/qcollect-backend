@@ -23,4 +23,8 @@ public class CreateProjectAdminRequest {
     private String password;
 
     private String phone;
+
+    public void setEmail(String email) {
+        this.email = email == null ? null : email.trim();
+    }
 }

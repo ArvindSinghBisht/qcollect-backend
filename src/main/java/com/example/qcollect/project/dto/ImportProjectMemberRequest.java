@@ -27,4 +27,8 @@ public class ImportProjectMemberRequest {
 
     @NotNull
     private ProjectRole role;
+
+    public void setEmail(String email) {
+        this.email = email == null ? null : email.trim();
+    }
 }

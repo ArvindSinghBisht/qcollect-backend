@@ -18,4 +18,8 @@ public class InviteUserRequest {
 
     private UUID roleId;
 
+    public void setEmail(String email) {
+        this.email = email == null ? null : email.trim();
+    }
+
 }
