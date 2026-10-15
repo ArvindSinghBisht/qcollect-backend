@@ -1,0 +1,70 @@
+# Render has no native Java runtime. This blueprint builds the qcollect
+# Spring Boot app (the fifff-main zip, identical to
+# github.com/ArvindSinghBisht/qcollect-backend @ cfeb79cc) from a Dockerfile.
+# Flyway runs on startup. Do not put secrets in this file.
+
+databases:
+  - name: qcollect-db
+    databaseName: qcollect
+    plan: free
+    region: oregon
+    # Spring Boot 3.5.4 manages Flyway 11.7.2. Render's default when this
+    # field is omitted is currently PostgreSQL 18, which that Flyway release
+    # predates. Pin 17 so the first migrate uses a version this stack targets.
+    postgresMajorVersion: "17"
+
+services:
+  - type: web
+    name: qcollect-backend
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /swagger-ui/index.html
+    envVars:
+      # Internal Render Postgres URL (postgresql://user:password@host:port/db).
+      # docker-entrypoint.sh rewrites it to jdbc:postgresql://host:port/db?sslmode=require
+      # unless SPRING_DATASOURCE_URL is already set.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: qcollect-db
+          property: connectionString
+      - key: DB_USER
+        fromDatabase:
+          name: qcollect-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: qcollect-db
+          property: password
+      # Required at startup. CloudinaryConfig throws if cloudinary.url is blank.
+      - key: CLOUDINARY_URL
+        sync: false
+      - key: CLOUDINARY_FOLDER
+        value: qcollect
+      - key: CLOUDINARY_MAX_IMAGE_SIZE_BYTES
+        value: "15728640"
+      # Overrides jwt.secret committed in application.properties.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: SPRING_MAIL_HOST
+        value: smtp.gmail.com
+      - key: SPRING_MAIL_PORT
+        value: "587"
+      - key: SPRING_MAIL_USERNAME
+        sync: false
+      - key: SPRING_MAIL_PASSWORD
+        sync: false
+      # Used only when a project connects Google Sheets. Not required to boot.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        sync: false
+      - key: JAVA_TOOL_OPTIONS
+        value: "-XX:MaxRAMPercentage=75.0"
+      - key: SPRING_JPA_SHOW_SQL
+        value: "false"
+      - key: LOGGING_LEVEL_ORG_SPRINGFRAMEWORK_SECURITY
+        value: INFO
